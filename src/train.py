@@ -222,7 +222,7 @@ def main():
         train_dataset=tokenized["train"],
         eval_dataset=tokenized["validation"],
         data_collator=collator,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         compute_metrics=compute_metrics_fn,
         class_weights=class_weights,
         use_fgm=args.use_fgm,
