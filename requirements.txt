@@ -1,0 +1,16 @@
+transformers>=4.40
+datasets>=2.19
+accelerate>=0.30
+peft>=0.11
+torch>=2.1
+scikit-learn>=1.3
+pandas>=2.0
+numpy>=1.24
+seaborn>=0.13
+matplotlib>=3.7
+statsmodels>=0.14
+sentencepiece
+# Official BanglaBERT text normalizer -- required for best results, see
+# https://github.com/csebuetnlp/normalizer . Install separately if this
+# fails in an offline Kaggle session (train.py falls back gracefully):
+git+https://github.com/csebuetnlp/normalizer
