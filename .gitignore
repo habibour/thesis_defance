@@ -4,3 +4,5 @@ runs/
 *.pt
 *.bin
 .ipynb_checkpoints/
+Dataset/
+*.pdf
