@@ -3,6 +3,10 @@ datasets>=2.19
 accelerate>=0.30
 peft>=0.11
 torch>=2.1
+# peft's LoRA dispatcher probes torchao unconditionally and raises (rather than
+# falling back) if an older torchao is installed -- Kaggle images ship 0.10.0,
+# below peft's minimum, so pin this even though we never use torchao/quantization.
+torchao>=0.16.0
 scikit-learn>=1.3
 pandas>=2.0
 numpy>=1.24

@@ -145,7 +145,19 @@ def maybe_wrap_with_lora(model, args):
         # LoRA only needs to cover the frozen backbone's attention layers.
         modules_to_save=["classifier"],
     )
-    model = get_peft_model(model, lora_config)
+    try:
+        model = get_peft_model(model, lora_config)
+    except ImportError as e:
+        # peft's LoRA dispatcher unconditionally probes torchao and raises
+        # instead of falling back when an older torchao is installed (e.g.
+        # Kaggle's base image ships 0.10.0). We never use torchao/quantized
+        # LoRA here, so stub the check out and retry once.
+        if "torchao" not in str(e):
+            raise
+        import peft.tuners.lora.torchao as _peft_lora_torchao
+
+        _peft_lora_torchao.is_torchao_available = lambda: False
+        model = get_peft_model(model, lora_config)
     return model
 
 
