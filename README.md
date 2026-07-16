@@ -130,3 +130,4 @@ python evaluate.py ensemble --runs ../runs/<run1> ../runs/<run2> ../runs/<run3>
 - **Model selection**: best checkpoint by validation macro-F1, not
   accuracy, so class imbalance doesn't bias checkpoint selection toward
   the majority class.
+# thesis_defance
