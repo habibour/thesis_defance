@@ -246,8 +246,15 @@ def main():
 
     # Final evaluation on the held-out test set (never seen during training/val).
     test_output = trainer.predict(tokenized["test"])
-    test_preds = np.argmax(test_output.predictions, axis=-1)
+    test_logits = test_output.predictions
+    test_preds = np.argmax(test_logits, axis=-1)
     test_labels = test_output.label_ids
+
+    # Softmax probabilities, saved for soft-vote ensembling (evaluate.py
+    # ensemble --mode soft) -- averaging probabilities across models is
+    # generally stronger than averaging hard predictions.
+    exp_logits = np.exp(test_logits - test_logits.max(axis=-1, keepdims=True))
+    test_probs = exp_logits / exp_logits.sum(axis=-1, keepdims=True)
 
     acc = accuracy_score(test_labels, test_preds)
     macro_f1 = f1_score(test_labels, test_preds, average="macro")
@@ -287,9 +294,11 @@ def main():
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 
-    # Save raw predictions too -- needed later for McNemar's test between runs.
+    # Save raw predictions too -- needed later for McNemar's test between runs
+    # and for soft-vote ensembling (test_probs.npy).
     np.save(os.path.join(run_dir, "test_preds.npy"), test_preds)
     np.save(os.path.join(run_dir, "test_labels.npy"), test_labels)
+    np.save(os.path.join(run_dir, "test_probs.npy"), test_probs)
 
     print(f"[result] test_accuracy={acc:.4f} test_macro_f1={macro_f1:.4f}")
     print(f"[saved] {metrics_path}")

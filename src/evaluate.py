@@ -3,12 +3,13 @@ Post-hoc evaluation utilities:
   - confusion matrix plotting from a saved test_metrics.json
   - McNemar's test between two runs' saved predictions (test_preds.npy),
     for the "is the improvement statistically significant" defense question
-  - simple hard-vote ensemble across N runs' saved predictions
+  - soft-vote (probability-averaging, default) or hard-vote (majority) ensemble
+    across N runs' saved predictions
 
 Usage:
     python evaluate.py confusion --metrics_json ../runs/<run_name>/test_metrics.json
     python evaluate.py mcnemar --run_a ../runs/<run_a> --run_b ../runs/<run_b>
-    python evaluate.py ensemble --runs ../runs/<run1> ../runs/<run2> ../runs/<run3>
+    python evaluate.py ensemble --runs ../runs/<run1> ../runs/<run2> ../runs/<run3> [--mode soft|hard]
 """
 
 import argparse
@@ -81,21 +82,45 @@ def cmd_mcnemar(args):
 
 
 def cmd_ensemble(args):
-    """Hard majority-vote ensemble across N runs' saved predictions."""
-    all_preds = [np.load(os.path.join(r, "test_preds.npy")) for r in args.runs]
-    labels = np.load(os.path.join(args.runs[0], "test_labels.npy"))
-    for r, p in zip(args.runs, all_preds):
-        assert len(p) == len(labels), f"{r} has a different test set size"
+    """Ensemble across N runs' saved predictions.
 
-    stacked = np.stack(all_preds, axis=0)  # [n_runs, n_examples]
-    num_labels = int(stacked.max()) + 1
-    votes = np.apply_along_axis(
-        lambda col: np.bincount(col, minlength=num_labels).argmax(), axis=0, arr=stacked
-    )
+    --mode soft (default): average each model's predicted-class probabilities
+    (test_probs.npy) and argmax the result -- this is the confidence-summing
+    approach BLP-2023's Knowdee system used, and is generally stronger than
+    hard voting. Requires each run to have been produced by a train.py that
+    saves test_probs.npy (current version does; older saved runs may not).
+
+    --mode hard: majority vote over already-argmaxed predictions
+    (test_preds.npy) -- the original, simpler fallback, usable even for
+    older runs that predate probability saving.
+    """
+    labels = np.load(os.path.join(args.runs[0], "test_labels.npy"))
+
+    if args.mode == "soft":
+        missing = [r for r in args.runs if not os.path.exists(os.path.join(r, "test_probs.npy"))]
+        if missing:
+            raise FileNotFoundError(
+                f"test_probs.npy missing for: {missing}. These runs predate probability "
+                "saving -- rerun them, or use --mode hard instead."
+            )
+        all_probs = [np.load(os.path.join(r, "test_probs.npy")) for r in args.runs]
+        for r, p in zip(args.runs, all_probs):
+            assert len(p) == len(labels), f"{r} has a different test set size"
+        avg_probs = np.mean(np.stack(all_probs, axis=0), axis=0)  # [n_examples, n_labels]
+        votes = np.argmax(avg_probs, axis=-1)
+    else:
+        all_preds = [np.load(os.path.join(r, "test_preds.npy")) for r in args.runs]
+        for r, p in zip(args.runs, all_preds):
+            assert len(p) == len(labels), f"{r} has a different test set size"
+        stacked = np.stack(all_preds, axis=0)  # [n_runs, n_examples]
+        num_labels = int(stacked.max()) + 1
+        votes = np.apply_along_axis(
+            lambda col: np.bincount(col, minlength=num_labels).argmax(), axis=0, arr=stacked
+        )
 
     acc = accuracy_score(labels, votes)
     macro_f1 = f1_score(labels, votes, average="macro")
-    print(f"[ensemble of {len(args.runs)} runs] accuracy={acc:.4f} macro_f1={macro_f1:.4f}")
+    print(f"[ensemble of {len(args.runs)} runs, mode={args.mode}] accuracy={acc:.4f} macro_f1={macro_f1:.4f}")
 
 
 def main():
@@ -113,6 +138,7 @@ def main():
 
     p_ens = sub.add_parser("ensemble")
     p_ens.add_argument("--runs", nargs="+", required=True)
+    p_ens.add_argument("--mode", choices=["soft", "hard"], default="soft")
     p_ens.set_defaults(func=cmd_ensemble)
 
     args = parser.parse_args()
