@@ -6,3 +6,4 @@ runs/
 .ipynb_checkpoints/
 Dataset/
 *.pdf
+.DS_Store
