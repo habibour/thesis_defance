@@ -244,6 +244,18 @@ def main():
 
     trainer.train()
 
+    def softmax(logits):
+        exp_logits = np.exp(logits - logits.max(axis=-1, keepdims=True))
+        return exp_logits / exp_logits.sum(axis=-1, keepdims=True)
+
+    # Validation-set predictions, saved so evaluate.py's `priorshift` command
+    # can estimate a label-shift correction (Black-Box Shift Estimation,
+    # Lipton et al. 2018) using the validation confusion matrix -- this is
+    # separate from the model-selection eval done during trainer.train().
+    val_output = trainer.predict(tokenized["validation"])
+    val_probs = softmax(val_output.predictions)
+    val_labels = val_output.label_ids
+
     # Final evaluation on the held-out test set (never seen during training/val).
     test_output = trainer.predict(tokenized["test"])
     test_logits = test_output.predictions
@@ -253,8 +265,7 @@ def main():
     # Softmax probabilities, saved for soft-vote ensembling (evaluate.py
     # ensemble --mode soft) -- averaging probabilities across models is
     # generally stronger than averaging hard predictions.
-    exp_logits = np.exp(test_logits - test_logits.max(axis=-1, keepdims=True))
-    test_probs = exp_logits / exp_logits.sum(axis=-1, keepdims=True)
+    test_probs = softmax(test_logits)
 
     acc = accuracy_score(test_labels, test_preds)
     macro_f1 = f1_score(test_labels, test_preds, average="macro")
@@ -294,11 +305,14 @@ def main():
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 
-    # Save raw predictions too -- needed later for McNemar's test between runs
-    # and for soft-vote ensembling (test_probs.npy).
+    # Save raw predictions too -- needed later for McNemar's test between runs,
+    # soft-vote ensembling (test_probs.npy), and label-shift correction
+    # (val_probs.npy / val_labels.npy).
     np.save(os.path.join(run_dir, "test_preds.npy"), test_preds)
     np.save(os.path.join(run_dir, "test_labels.npy"), test_labels)
     np.save(os.path.join(run_dir, "test_probs.npy"), test_probs)
+    np.save(os.path.join(run_dir, "val_probs.npy"), val_probs)
+    np.save(os.path.join(run_dir, "val_labels.npy"), val_labels)
 
     print(f"[result] test_accuracy={acc:.4f} test_macro_f1={macro_f1:.4f}")
     print(f"[saved] {metrics_path}")

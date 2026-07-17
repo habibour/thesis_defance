@@ -5,11 +5,15 @@ Post-hoc evaluation utilities:
     for the "is the improvement statistically significant" defense question
   - soft-vote (probability-averaging, default) or hard-vote (majority) ensemble
     across N runs' saved predictions
+  - label-shift correction (priorshift) for a single run, using the
+    validation confusion matrix to correct for the train/test class-balance
+    shift we diagnosed on this dataset -- see cmd_priorshift for details
 
 Usage:
     python evaluate.py confusion --metrics_json ../runs/<run_name>/test_metrics.json
     python evaluate.py mcnemar --run_a ../runs/<run_a> --run_b ../runs/<run_b>
     python evaluate.py ensemble --runs ../runs/<run1> ../runs/<run2> ../runs/<run3> [--mode soft|hard]
+    python evaluate.py priorshift --run ../runs/<run_name>
 """
 
 import argparse
@@ -123,6 +127,80 @@ def cmd_ensemble(args):
     print(f"[ensemble of {len(args.runs)} runs, mode={args.mode}] accuracy={acc:.4f} macro_f1={macro_f1:.4f}")
 
 
+def cmd_priorshift(args):
+    """Label-shift correction (Black-Box Shift Estimation, Lipton et al. 2018).
+
+    We already established that the class balance differs between the
+    train/validation pool and the real test set (e.g. Negative is ~47.6% of
+    train/val but only ~42.7% of test for the 3-class task). BBSE corrects
+    for exactly this without ever looking at test labels:
+
+      1. Estimate the confusion matrix C[i,j] = P(predicted=i | true=j) from
+         the validation set (uses val labels -- legitimate, val is not test).
+      2. Compute the empirical distribution of the model's predictions on the
+         *test inputs* (argmax of test_probs -- uses no test labels).
+      3. Solve C @ p_test = q_hat for p_test, the estimated true test-label
+         prior.
+      4. Re-weight each test example's predicted-class probabilities by
+         w[c] = p_test[c] / p_val[c], renormalize, and take the new argmax.
+
+    test_labels.npy is only used afterwards, to report before/after metrics
+    -- never as part of the correction itself.
+    """
+    val_probs = np.load(os.path.join(args.run, "val_probs.npy"))
+    val_labels = np.load(os.path.join(args.run, "val_labels.npy"))
+    test_probs = np.load(os.path.join(args.run, "test_probs.npy"))
+    test_labels = np.load(os.path.join(args.run, "test_labels.npy"))
+
+    num_labels = val_probs.shape[1]
+    val_preds = np.argmax(val_probs, axis=-1)
+
+    # Step 1: confusion matrix on validation, columns = true label.
+    C = np.zeros((num_labels, num_labels))
+    for true_c in range(num_labels):
+        mask = val_labels == true_c
+        if mask.sum() == 0:
+            C[:, true_c] = 1.0 / num_labels
+            continue
+        for pred_c in range(num_labels):
+            C[pred_c, true_c] = np.mean(val_preds[mask] == pred_c)
+
+    p_val = np.array([np.mean(val_labels == c) for c in range(num_labels)])
+
+    # Step 2: empirical predicted distribution on test inputs (no test labels used).
+    test_preds_raw = np.argmax(test_probs, axis=-1)
+    q_hat = np.array([np.mean(test_preds_raw == c) for c in range(num_labels)])
+
+    # Step 3: solve C @ p = q_hat (least squares, then clip + renormalize to
+    # keep it a valid probability distribution).
+    p_test_est, *_ = np.linalg.lstsq(C, q_hat, rcond=None)
+    p_test_est = np.clip(p_test_est, 1e-6, None)
+    p_test_est = p_test_est / p_test_est.sum()
+
+    print(f"[priorshift] validation class prior: {p_val.round(4).tolist()}")
+    print(f"[priorshift] estimated test class prior: {p_test_est.round(4).tolist()}")
+
+    # Step 4: re-weight and re-predict.
+    w = p_test_est / p_val
+    adjusted_probs = test_probs * w[None, :]
+    adjusted_probs = adjusted_probs / adjusted_probs.sum(axis=-1, keepdims=True)
+    adjusted_preds = np.argmax(adjusted_probs, axis=-1)
+
+    before_acc = accuracy_score(test_labels, test_preds_raw)
+    before_f1 = f1_score(test_labels, test_preds_raw, average="macro")
+    after_acc = accuracy_score(test_labels, adjusted_preds)
+    after_f1 = f1_score(test_labels, adjusted_preds, average="macro")
+
+    print(f"[priorshift] before: accuracy={before_acc:.4f} macro_f1={before_f1:.4f}")
+    print(f"[priorshift] after:  accuracy={after_acc:.4f} macro_f1={after_f1:.4f}")
+    if after_f1 > before_f1:
+        print(f"[priorshift] improved macro_f1 by {after_f1 - before_f1:+.4f}")
+    else:
+        print(f"[priorshift] did not improve macro_f1 ({after_f1 - before_f1:+.4f}) "
+              "-- the estimated shift may be too noisy on this validation size; "
+              "report the uncorrected number.")
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -140,6 +218,10 @@ def main():
     p_ens.add_argument("--runs", nargs="+", required=True)
     p_ens.add_argument("--mode", choices=["soft", "hard"], default="soft")
     p_ens.set_defaults(func=cmd_ensemble)
+
+    p_ps = sub.add_parser("priorshift")
+    p_ps.add_argument("--run", required=True)
+    p_ps.set_defaults(func=cmd_priorshift)
 
     args = parser.parse_args()
     args.func(args)
